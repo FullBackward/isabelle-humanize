@@ -84,7 +84,7 @@ Two channels, kept strictly separate:
 | Channel | Consumer | Mechanism | Used for |
 |---|---|---|---|
 | **MCP (LSP server)** | builder & reviewer agents | each CLI attaches `mcp_lsp_server` via workspace `.mcp.json` | all *agent* prover interaction: edit-file + `isabelle_diagnostic_messages`, `isabelle_goal`, `isabelle_proof_state`, `isabelle_query`, `isabelle_sledgehammer`, `isabelle_multi_attempt`, checkpoints |
-| **REST (gym HTTP)** | the flow itself | stdlib `urllib` against `http://localhost:8000` | the **arbiter** (one-shot stateless `verify_bigstep_text`-equivalent) — no session, no lease, no MCP client needed |
+| **REST (gym HTTP)** | the flow itself | stdlib `urllib` against `http://localhost:8000` | the **arbiter** (one-shot stateless `POST /api/v1/sessions/bigstep`) — no session, no lease, no MCP client needed |
 
 The reviewer additionally returns *observed* prover state (subgoals before/after,
 `proof_finished`, sorry-free) inside its structured verdict (§5.3), so the flow needs
@@ -110,9 +110,15 @@ not subject to hmz's `hushed()` stripping, but verified in M0):
 }
 ```
 
-Role enforcement is structural: the LSP MCP never writes files. The **builder** edits
-`problem.thy` with its CLI's native Edit/Write; the **reviewer** is given no file-write
-capability in its prompt and cannot mutate through the MCP — worst case it calls
+Role enforcement is **structural on the MCP channel only**: the LSP MCP never writes
+files. The **builder** edits `problem.thy` with its CLI's native Edit/Write. The
+**reviewer**, however, keeps its CLI's *native* file tools (Edit/Write/Bash), and hmz
+runs agents with permissions bypassed — so prompt instructions alone do not make the
+reviewer read-only. The reviewer role therefore additionally requires its CLI's tools to
+be **restricted at spawn** (e.g. Claude `--allowedTools` without Edit/Write/Bash, codex
+sandbox/read-only flags) or a read-only workspace mount; which mechanism works per CLI
+is verified in M0.3 alongside the attach matrix. Until then, treat reviewer read-onlyness
+as prompt-level, not structural. Worst case through the MCP itself it calls
 `isabelle_multi_attempt`, which runs on isolated scratch sessions.
 
 ---
@@ -258,9 +264,11 @@ on IsabelleGym's async client; we reimplement with `urllib.request`):
 1. read final `problem.thy` from the workspace;
 2. regex `\b(sorry|oops)\b` ⇒ unsolved;
 3. target theorem name present (from the task spec) ⇒ else unsolved;
-4. POST to the gym bigstep endpoint (`verify_bigstep_text` shape recorded in M0.5),
-   `arbiter_timeout_s` budget, deriving the parent session from dotted imports
-   (`HOL-Computational_Algebra.X` → field `HOL-Computational_Algebra`);
+4. POST to the gym bigstep endpoint — `POST /api/v1/sessions/bigstep` with
+   `{theory_name, theory, dependencies, field, timeout}`, returning `theory_verified`
+   (request/response shape recorded in M0.5) — under the `arbiter_timeout_s` budget,
+   deriving the parent session from dotted imports (`HOL-Computational_Algebra.X` →
+   `field: "HOL-Computational_Algebra"`);
 5. `solved = theory_verified`. Exceptions ⇒ unsolved with typed error, never crash the
    loop.
 
@@ -394,9 +402,11 @@ target architecture instead of a throwaway prototype.
 - **Session pool memory** — builder + reviewer + `multi_attempt` scratch sessions
   against a 24 GB container (1.5–2.5 GB/session): keep `ISABELLE_POOL_SIZE` ≤ 6 and
   `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE` ≤ 4 until M4.
-- **Reviewer overreach** — reviewer has no write path (structural), but a reviewer
-  *prompted* into trying to fix proofs wastes turns; the review prompt forbids
-  proof-text output, and readiness/goals must come from MCP observations, not prose.
+- **Reviewer overreach** — the reviewer has no write path *through the MCP*
+  (structural), but its CLI's native file tools remain a write path unless restricted
+  at spawn (see §3 — verified per CLI in M0.3). Independently, a reviewer *prompted*
+  into trying to fix proofs wastes turns; the review prompt forbids proof-text output,
+  and readiness/goals must come from MCP observations, not prose.
 - **Upstream drift** — IsabelleGym has no CI and an in-flight rename; pin the known-good
   commit in `workspaces/template/README` and record it in every cycle.
 

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "isabellegym": {
+      "command": "/home/winst/.venvs/lsp-mcp/bin/python",
+      "args": ["-m", "mcp_lsp_server.app"],
+      "env": {
+        "PYTHONPATH": "/home/winst/IsabelleGym",
+        "ISABELLE_MCP_LSP_GYM_URL": "http://localhost:8000",
+        "ISABELLE_MCP_LSP_TRANSPORT": "stdio",
+        "ISABELLE_MCP_LSP_LOAD_TIMEOUT": "300",
+        "ISABELLE_MCP_LSP_HTTP_TIMEOUT": "900"
+      }
+    }
+  }
+}

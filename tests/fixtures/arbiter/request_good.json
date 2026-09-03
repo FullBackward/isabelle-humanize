@@ -1,0 +1,7 @@
+{
+  "theory_name": "ArbiterSmoke",
+  "theory": "theory ArbiterSmoke\nimports Main\nbegin\n\nlemma arbiter_smoke: \"True\" by simp\n\nend\n",
+  "dependencies": [],
+  "field": "HOL",
+  "timeout": 300
+}
