@@ -54,7 +54,10 @@ def normalize_problem(text: str, default_field: str) -> tuple[str, "arbiter.Task
     is written back as the first line.
     """
     spec = arbiter.parse_spec(text, default_field)
-    body = arbiter._TASK_COMMENT.sub("", text, count=1)
+    # Strip every stale TASK comment (re-imports carry one from last time,
+    # possibly a degenerate one the strict parse regex cannot see), rename
+    # the theory to `Problem`, and write back one canonical header.
+    body = arbiter._TASK_COMMENT_LOOSE.sub("", text)
     body = _THEORY_NAME.sub(r"\g<1>Problem", body, count=1)
     imports = ",".join(spec.imports)
     header = (

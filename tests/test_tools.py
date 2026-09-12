@@ -474,3 +474,27 @@ def test_import_git_repo_and_initial_commit(tmp_path: Path) -> None:
         capture_output=True, text=True, check=True, timeout=10,
     ).stdout
     assert status == ""
+
+
+def test_import_roundtrip_strips_degenerate_task_comment(tmp_path: Path) -> None:
+    """Re-importing an imported file (even one whose TASK comment is
+    degenerate, e.g. the empty-imports bug) yields exactly one canonical
+    header with correctly re-derived imports."""
+    src = tmp_path / "src.thy"
+    src.write_text(
+        '(* TASK: theorem=putnam_2023_a1 imports= field=HOL *)\n'
+        'theory Problem imports Complex_Main\n"HOL-Analysis.Derivative"\nbegin\n\n'
+        'lemma putnam_2023_a1: "True" by sorry\n\nend\n',
+        encoding="utf-8",
+    )
+    ws = tmp_path / "ws"
+    spec = import_problem.create_workspace(src, ws, git=False)
+    text = (ws / "problem.thy").read_text(encoding="utf-8")
+    assert text.count("TASK:") == 1
+    assert spec.imports == ["Complex_Main", "HOL-Analysis.Derivative"]
+    # And a second round-trip over the output stays canonical.
+    ws2 = tmp_path / "ws2"
+    spec2 = import_problem.create_workspace(ws / "problem.thy", ws2, git=False)
+    text2 = (ws2 / "problem.thy").read_text(encoding="utf-8")
+    assert text2.count("TASK:") == 1
+    assert spec2.imports == spec.imports

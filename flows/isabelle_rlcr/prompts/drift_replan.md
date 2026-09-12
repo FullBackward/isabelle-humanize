@@ -15,6 +15,13 @@ documented failure mode. This round MUST change strategy:
      suggestion verbatim;
    - or restructure the proof (induction on a different variable, a different
      rule, a case split).
+   The sledgehammer-first rule is unchanged: run
+   `mcp__isabellegym__isabelle_sledgehammer` on the failing goal before ANY
+   automated-method attempt (`simp`, `blast`, `auto`, `presburger`, ATP
+   calls), including the candidates you feed `isabelle_multi_attempt`.
+   Being stuck is NOT a reason to search the internet or look up solutions --
+   that rule has not changed. Change your mathematics, not your information
+   source.
 3. Small steps, diagnostics after every edit.
 
 The review of the last round:

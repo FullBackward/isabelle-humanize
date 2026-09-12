@@ -7,7 +7,7 @@ Usage:
 
 Needs: pip install "mcp<2" httpx  (the lsp-mcp venv; the mcp<2 pin is
 load-bearing -- mcp 2.0 removed FastMCP). The IsabelleGym stack must be up
-(curl http://localhost:8000/healthz).
+(curl http://localhost:8001/healthz).
 
 Default mode drives the handoff sequence over stdio MCP:
 isabelle_open -> append a proof step ON DISK -> isabelle_diagnostic_messages
@@ -40,7 +40,7 @@ FLOW_DIR = REPO_ROOT / "flows" / "isabelle_rlcr"
 #: Defaults match the M0 machine setup; every one is overridable.
 DEFAULT_REPO = os.environ.get("ISABELLEGYM_REPO", str(pathlib.Path.home() / "IsabelleGym"))
 DEFAULT_VENV_PY = str(pathlib.Path.home() / ".venvs" / "lsp-mcp" / "bin" / "python")
-DEFAULT_GYM_URL = "http://localhost:8000"
+DEFAULT_GYM_URL = "http://localhost:8001"
 
 INITIAL = 'theory Smoke\nimports Main\nbegin\n\nlemma true_smoke: "True"\n'
 APPEND = "  by simp\n"

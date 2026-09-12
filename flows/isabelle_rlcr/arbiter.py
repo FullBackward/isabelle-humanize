@@ -33,8 +33,21 @@ _TASK_COMMENT = re.compile(
     r"\(\*\s*TASK:\s*theorem=(?P<theorem>\S+)\s+imports=(?P<imports>\S+)\s+"
     r"field=(?P<field>\S+)\s*\*\)"
 )
+#: A looser match that also catches degenerate TASK comments (e.g. an empty
+#: imports= written by an older importer). Used to STRIP stale comments on
+#: re-import, never to parse them.
+_TASK_COMMENT_LOOSE = re.compile(
+    r"\(\*\s*TASK:\s*theorem=(?P<theorem>\S+)\s+imports=(?P<imports>\S*)\s*"
+    r"field=(?P<field>\S+)\s*\*\)"
+)
 _THEORY_LINE = re.compile(r"^\s*theory\s+(?P<name>[A-Za-z][A-Za-z0-9_']*)", re.MULTILINE)
-_IMPORTS_LINE = re.compile(r"^\s*imports\s+(?P<imports>.+)$", re.MULTILINE)
+#: The theory header, from the theory line to `begin`: imports may follow the
+#: theory name on the same line and may span several lines.
+_HEADER = re.compile(
+    r"^\s*theory\s+[A-Za-z][A-Za-z0-9_']*(?P<body>.*?)^\s*begin\b",
+    re.MULTILINE | re.DOTALL,
+)
+_HEADER_IMPORTS = re.compile(r"\bimports\b(?P<imports>.*?)(?:\bkeywords\b|\Z)", re.DOTALL)
 _SORRY = re.compile(r"\b(sorry|oops)\b")
 
 
@@ -42,12 +55,24 @@ class ArbiterError(RuntimeError):
     """A typed arbiter/readiness failure -- journaled, never raised through the loop."""
 
 
+def _parse_imports(text: str) -> list[str]:
+    """The theory's imports, from its header: one-line or multi-line lists,
+    quoted or bare session-qualified names. "" when there is no header."""
+    header = _HEADER.search(text)
+    if header is None:
+        return []
+    found = _HEADER_IMPORTS.search(header.group("body"))
+    if found is None:
+        return []
+    return [tok.strip('"') for tok in found.group("imports").split()]
+
+
 def parse_spec(text: str, fallback_field: str) -> TaskSpec:
     """Reads the task spec out of the problem file's header comment.
 
     The theory name comes from the `theory` line (it must match the file name,
     which Isabelle enforces anyway); theorem/imports/field come from the TASK
-    comment, with the imports line and the config field as fallbacks.
+    comment, with the theory header's imports and the config field as fallbacks.
     """
     theory = _THEORY_LINE.search(text)
     if theory is None:
@@ -61,12 +86,7 @@ def parse_spec(text: str, fallback_field: str) -> TaskSpec:
             imports=imports,
             field=comment.group("field"),
         )
-    imports_line = _IMPORTS_LINE.search(text)
-    imports = (
-        [one.strip('"') for one in imports_line.group("imports").split()]
-        if imports_line is not None
-        else []
-    )
+    imports = _parse_imports(text)
     # Without a TASK comment the target theorem is the first lemma/theorem name.
     named = re.search(r"^\s*(?:lemma|theorem)\s+([A-Za-z][A-Za-z0-9_']*)", text, re.MULTILINE)
     if named is None:
@@ -108,13 +128,24 @@ def readiness(workspace: Path, config: RLCRConfig, spec: TaskSpec) -> Readiness:
     did it use sorry -- answered by the prover, over REST, in one document load."""
     base = config.gym_url.rstrip("/")
     text = (workspace / config.problem_file).read_text(encoding="utf-8")
+    # Theories come from the file AS IT STANDS: acquiring a session pays
+    # parent resolution for whatever it is asked for, and a stale spec import
+    # (e.g. HOL-Analysis.* the builder has since dropped) costs minutes and
+    # can time the acquire out. Only the current header is truthful.
+    current_imports = _parse_imports(text) or spec.imports
     session_id: Optional[str] = None
     lease_id: Optional[str] = None
     try:
         acquired = _request(
             "POST",
             f"{base}/api/v1/sessions/acquire",
-            {"reuse_dirty": True, "field": spec.field},
+            # theories: this gym's REPL sessions only see theories from their
+            # own heap-ancestor chain -- a session acquired WITHOUT theories
+            # cannot load anything beyond Main (probe: "Undefined type name
+            # real" on Complex_Main imports, 2026-09-03). Passing the file's
+            # imports makes the server enter them properly (and reuses warm
+            # theory-keyed sessions).
+            {"reuse_dirty": True, "field": spec.field, "theories": current_imports},
             config.readiness_timeout_s,
         )
         session_id = acquired.get("session_id") or acquired.get("id")
@@ -169,6 +200,20 @@ def readiness(workspace: Path, config: RLCRConfig, spec: TaskSpec) -> Readiness:
                 pass  # a session left behind is reaped by the server's lease reaper
 
 
+def parent_session(spec: TaskSpec) -> str:
+    """The build's parent session, derived from dotted imports.
+
+    A dotted import (`HOL-Analysis.Derivative`) needs its session prefix as
+    the build's parent (`HOL-Analysis`): with parent HOL the build server
+    cannot resolve it ("Cannot load theory", observed live 2026-09-04).
+    The first dotted import wins; otherwise the spec's field stands.
+    """
+    for one in spec.imports:
+        if "." in one:
+            return one.split(".", 1)[0]
+    return spec.field
+
+
 def check(workspace: Path, config: RLCRConfig, spec: TaskSpec) -> dict[str, Any]:
     """The arbiter: isabelle build, strict mode, target theorem present, no sorry.
 
@@ -184,16 +229,47 @@ def check(workspace: Path, config: RLCRConfig, spec: TaskSpec) -> dict[str, Any]
             "stage": "presence",
             "reason": f"target theorem {spec.target_theorem} not present",
         }
+    # The build's parent session comes from the file's own imports (parsed
+    # locally); `dependencies` stays EMPTY so the server extracts them from
+    # the theory text itself (build_verify.py:120 -- also the M0-recorded
+    # request shape). The builder may legitimately change imports while
+    # proving; only the file's own header can keep the build aligned with
+    # the text being built. The target theorem still comes from the spec,
+    # so renaming/weakening it is caught above.
+    theory = _THEORY_LINE.search(text)
+    theory_name = theory.group("name") if theory else spec.theory_name
+    current_imports = _parse_imports(text)
+    # The original imports are part of the problem: a builder may ADD
+    # libraries but never REMOVE one -- dropping an import and re-implementing
+    # the machinery locally is dodging the problem, not solving it (observed
+    # live on putnam_2023_a1, which shed HOL-Analysis.Derivative).
+    removed = [one for one in spec.imports if one not in current_imports]
+    if removed:
+        return {
+            "solved": False,
+            "stage": "imports",
+            "reason": (
+                f"original imports removed from the theory: {', '.join(removed)}. "
+                "The statement's imports are part of the problem -- restore them "
+                "(you may add libraries, never remove them)."
+            ),
+        }
+    build_spec = TaskSpec(
+        theory_name=theory_name,
+        target_theorem=spec.target_theorem,
+        imports=current_imports,
+        field=spec.field,
+    )
     base = config.gym_url.rstrip("/")
     try:
         answered = _request(
             "POST",
             f"{base}/api/v1/sessions/bigstep",
             {
-                "theory_name": spec.theory_name,
+                "theory_name": theory_name,
                 "theory": text,
-                "dependencies": spec.imports,
-                "field": spec.field,
+                "dependencies": [],
+                "field": parent_session(build_spec),
                 "timeout": config.arbiter_timeout_s,
             },
             config.arbiter_timeout_s + 60.0,

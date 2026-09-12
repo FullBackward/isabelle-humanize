@@ -23,7 +23,7 @@ truth the gates and the arbiter read:
   both verified; needs `DEEPSEEK_API_KEY`). DeepSeek-both-seats runs use the
   same spec for the builder. Fallback: `dsh/deepseek-v4-flash:high` with
   `reviewer_mcp: false` (no MCP in the dsh harness).
-- Gym: `http://localhost:8000`, `ISABELLE_POOL_SIZE=6`
+- Gym: `http://localhost:8001`, `ISABELLE_POOL_SIZE=6`
 
 ## `.mcp.json` paths
 

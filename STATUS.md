@@ -28,7 +28,149 @@ Conformance checker: 7/7 PASS on every rlcr arm; 6 PASS + verdict-malformed
 N-A (by design) on every solo arm. Smoke problems are trivial (round-0
 solves), so rlcr-vs-solo separation is expected on real problems, not here —
 this sweep validates the tooling, not the research claim.
-| M4 study | **Not started** | blocked on reviewer-family diversity (claude/codex) and compute budget |
+| M4 study | **IMO 2026 P1 solved** | imo2026_p1 solved 2026-09-10 (below); putnam_2023_a1 solved 2026-09-04; full study not started |
+
+### IMO 2026 P1 — SOLVED in one round (2026-09-10)
+
+Fifth attempt overall; the first on the fully-fixed stack (persistent
+streamable-http MCP, maxheap 9216, 20g container, sledgehammer-first +
+looping-tactic ban + scratch discipline + reviewer ATP gate, readiness 600 s,
+permission denies that fire). `terminal=complete` at **round 0**, arbiter
+`build_strict` verified in 44 s, 1059-line theory with **all five sorries
+discharged** (target `statement_a_termination` plus unique-large, invariance,
+terminal-value, `Mval>1`), 0 stalls, conformance 7/7 PASS, 3 lessons. Wall
+4 h 09 m (06:12→10:21 UTC), agent-active 248 min, ~$5.15 (peak window) —
+cost-comparable to humanfia's Kimi-K3 IMO Q1 run ($5.73 / 87 min API on Lean).
+Attempts 1–4 were the infrastructure R&D documented below (memory caps, MCP
+stdio races, opencode permission semantics); their spend (~$8) is excluded
+from the run figure. Archive: `runs/imo2026_p1-rlcr-deepseek/`.
+
+### First real problem: Putnam 2023 A1 — SOLVED (2026-09-04)
+
+4 attempts (watchdog-supervised, 5 then 15-min cadence), ~3 h 20 m wall
+(17:06–20:25 UTC, incl. infra downtime), both roles
+`opencode/deepseek/deepseek-v4-pro:high`, terminal `complete` at round 2,
+arbiter `build_strict` verified, conformance 7/7 PASS. The final 311-line
+proof is self-contained over `Complex_Main` (the builder dropped the
+`HOL-Analysis.Derivative` import and re-derived the derivative machinery it
+needed as local lemmas — kernel-accepted either way). KB: 5 lessons,
+several reused across attempts (the memory mechanism visibly working).
+
+Bugs the attempts surfaced, all fixed flow-side (125 tests green):
+import/TASK-header mangling → arbiter builds file-aligned
+(`dependencies: []`, parent session from current imports) + spec snapshot at
+setup; PEP 3110 `UnboundLocalError` on double readiness failure;
+readiness acquire passing stale spec imports (timeouts) → file-current
+imports. Attempt 3 died to a WSL distro crash (SIGTERM), not the flow.
+
+Post-solve hardening (2026-09-04, from the run analysis): the arbiter now
+also enforces an **original-imports subset gate** — a builder may add
+libraries but never remove one (stage `imports`; kills the "drop
+HOL-Analysis and re-implement deriv locally" shortcut structurally), and
+`round0.md` forbids re-implementing library constants, editing the TASK
+comment, and ad-hoc side-channel build loops (feedback comes from the MCP;
+first cold-heap diagnostics call is slow, wait for it). Answer-hint
+scrubbing stays manual (owner's choice — no importer gate was built).
+
+Prompt tooling refresh (2026-09-10, from the updated `mcp_lsp_server`
+README in the Windows IsabelleGym clone `C:\Users\winst\GitHub\IsabelleGym`
+— note the WSL clone's copy of that README is stale; the code itself is
+content-identical between clones modulo line endings): builder prompts
+(`round0.md`, `next_round.md`, `drift_replan.md`) now document
+`isabelle_query` as the sanctioned in-prover library-search channel,
+scratch-only experimentation (`isabelle_run_code`/`isabelle_multi_attempt`),
+theories-at-acquire (imports beyond `Main` resolve on their own), and
+1-based tool positions. New hard rule (owner decision 2026-09-10):
+**sledgehammer first** — no automated method on a goal (`simp`, `blast`,
+`auto`, `presburger`, ATP calls, including `multi_attempt` candidates)
+without an `isabelle_sledgehammer` call on that goal first. The reviewer
+`PROVER_ACCESS` block gained `isabelle_query` and `isabelle_sledgehammer`
+(read-only steering aids).
+
+IMO q1 run post-mortem (2026-09-10, owner decisions): the first real RC0
+run (15 rounds, ~8 h) produced an 881-line sorry-free file that the strict
+arbiter build then FAILED — 4+ logical errors at lines 571–639 (hand-written
+`metis` with wrong fact lists, which also looped and OOM-killed the build
+poly at the 20g cgroup cap, even on a quiet container; `oom_kill 13`). Three
+owner rulings: (1) **scratch discipline** — one prover session per
+workspace; `isabelle_run_code`/`isabelle_multi_attempt` are optional extras,
+abandoned under any pool/memory pressure, and the file session is NEVER
+closed/destroyed to make room for scratch (now in `round0.md` rule 4; the
+builder had done exactly that trade); (2) the **sledgehammer-first rule was
+ignored** — rule 7 now spells out that hand-written `metis`/`smt` with
+guessed facts is the loop's worst failure mode (looping + OOM), every such
+call must be a verbatim sledgehammer suggestion — generalized same day to
+ALL looping automation (`blast`/`force`/`fastforce`/hand-fed `auto`/`simp`),
+and the reviewer was made an **ATP gate**: `review.md` now audits every
+round for automation abuse and judges a round REGRESSED — regardless of
+diagnostics — when the proof carries a massive amount of hand-guessed
+`metis`/`smt`/looping tactics, with the offending lines as the top issue
+for the builder to replace; (3) **build memory cap** —
+not flow-side (a urllib client can't prlimit the server's subprocess);
+handed off as `isabellegym-build-memory-cap-issue(temp).md` (owner will set
+it container-side, e.g. `ML_OPTIONS --maxheap`). The pre-arbiter admin
+session-cleanup idea was abandoned (token plumbing not worth it). Also
+structural: the flow's `readiness_timeout_s=180` default is too small for
+this theory class (load_document >180 s, build ~370 s) — pass a larger
+value via `-c` on heavy problems, and note the loop's readiness gate can
+starve behind agent-held pool slots (28 readiness errors this run) while
+the arbiter itself needs no session.
+
+Attempt 2 (2026-09-10, aborted after ~15 min): the builder's FIRST MCP call
+returned "Not connected" — a transient startup race (opencode 1.18.27 tears
+down and re-establishes idle MCP connections; the call landed in a reconnect
+window, 4 s after a "MCP connection closed" lifecycle WARN). Reproduced and
+cleared: manual stdio handshake OK, `opencode mcp list` connected, and a
+one-shot `opencode run` in the workspace called `isabelle_heap_status`
+successfully in ~1 s. The real defect was agent behavior: from that single
+error it spent 10 min "debugging" the harness, then started a **local
+isabelle build** (`nohup .../Isabelle2025-2/bin/isabelle build -b
+HOL-Computational_Algebra`) — the exact side-channel rule 4 forbids.
+`round0.md` rule 4 now states that one MCP error is transient (wait and
+retry over a couple of minutes) and explicitly bans harness debugging,
+config touching, and local builds as workarounds.
+
+Attempts 3–4 (2026-09-10, both aborted early): same "Not connected" at the
+first MCP call — the stdio MCP connection died 4–8 s after every
+hmz-spawned opencode start (big prompt + `deepseek-v4-pro:high` first-token
+latency ~2 min; small-prompt probes always worked). Root cause: opencode
+1.18.27's stdio MCP lifecycle (5 s default tools-fetch timeout + idle
+teardown, no keepalive option) versus a python MCP whose cold start can
+exceed 5 s. **Fix (validated): run `mcp_lsp_server` as a PERSISTENT
+streamable-http service and point opencode at it as a `type: "remote"`
+MCP** — no stdio process for opencode to spawn or kill; idle periods are
+harmless HTTP reconnects. Service launch (must be up before runs):
+
+```sh
+cd ~/IsabelleGym && nohup env PYTHONPATH=. \
+  ISABELLE_MCP_LSP_GYM_URL=http://localhost:8001 \
+  ISABELLE_MCP_LSP_TRANSPORT=streamable-http \
+  ISABELLE_MCP_LSP_HOST=127.0.0.1 ISABELLE_MCP_LSP_PORT=8849 \
+  ISABELLE_MCP_LSP_LOAD_TIMEOUT=300 ISABELLE_MCP_LSP_HTTP_TIMEOUT=900 \
+  ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE=1 \
+  ~/.venvs/lsp-mcp/bin/python -m mcp_lsp_server.app > ~/mcp-lsp-http.log 2>&1 &
+# opencode.json mcp.isabellegym: {"type":"remote","url":"http://127.0.0.1:8849/mcp","timeout":300000}
+```
+
+Verified with a 45 s-idle-then-call probe under the exact hmz spawn shape
+(pro/high/--auto): diagnostics `completed, success=true`. Attempt 5's
+builder's first MCP call succeeded and it went straight into
+`find_theorems` exploration. Side effect: builder and reviewer now share
+one MCP service (file bindings keyed by file_path) — fewer sessions, one
+file session as the owner wants. The workspace `.mcp.json` (stdio) remains
+for Claude Code only.
+
+Also fixed the same day: opencode `permission.bash` rules — docs-conformant
+order is catch-all `"*"` FIRST, specific denies AFTER (**last matching rule
+wins**); a denies-first order silently disables every deny (verified by
+A/B). Denies now cover `curl/wget/docker/kill` plus local-Isabelle builds
+(`*/Isabelle2025-2/bin/isabelle*`, `./bin/isabelle*`, `isabelle build*`) —
+the structural backstop against agent-built heaps. Note the deny evaluation
+log still shows `action.pattern=*` for allowed commands; denies log their
+own pattern. Agent-built heaps from attempts 2–3
+(`~/.isabelle/Isabelle2025-2/heaps/.../HOL-Computational_Algebra`,
+`Problem_Check` logs) were removed; the Sep-4 `Build_local`/`Build_final`
+artifacts predate this and were left in place.
 
 ## Validated end-to-end behavior (live runs, kimi/kimi-k3 for both roles)
 
@@ -139,28 +281,120 @@ this sweep validates the tooling, not the research claim.
   detects state-without-artifacts and re-runs setup (journaled as
   `resume_reset`). A tracker deleted while the journal survives is still
   tampering, refused by the pre-gates — not reset.
+- **`parse_spec` could not see one-line theory headers.** A source written
+  `theory Problem imports Complex_Main` (PutnamBench layout) fell through
+  the imports-line regex and got a degenerate `imports=` TASK comment — and
+  the degenerate comment was then invisible to both the parse regex and the
+  re-import stripper. Fixed: header-body import parsing (`_HEADER` +
+  `_HEADER_IMPORTS`), and `_TASK_COMMENT_LOOSE` strips degenerate comments
+  on re-import. Round-trip test added. (The arbiter itself was never at
+  risk: the bigstep server extracts imports from the theory text when
+  `dependencies` is empty — `build_verify.py:120`.)
+- **First HOL-Analysis run stalls on the heap build.** A problem importing
+  `HOL-Analysis.*` triggers a full session-image build on first use
+  (tens of minutes); the builder reads it as the prover hanging. Pre-build
+  once: `docker compose exec -d isabelle-gym bash -c "isabelle build -b
+  HOL-Analysis > /app/logs/heap-HOL-Analysis.log 2>&1"` — `/root/.isabelle`
+  is a named volume, so it persists across container restarts.
+  **`ML_SYSTEM_64=true` is required** (now in IsabelleGym `.env`, a config
+  change like the pool tuning): the default 32-bit PolyML gets SIGKILLed
+  building HOL-Analysis under the 14g container cap, and 64-bit heaps live
+  in a different heap dir than 32-bit sessions read — the setting must be
+  container-wide or the server's own builds hit the same wall. Note 64-bit
+  sessions use more heap each; if the pool pressures the cap on
+  HOL-Analysis problems, lower `ISABELLE_POOL_SIZE` from 6.
 
 ## Environment gotchas (this machine, WSL)
 
+- **Contamination & side-channel controls (updated 2026-09-07).** Prompt
+  rules as before (no internet, no solution lookups), plus now
+  **structural bash-pattern denies in `~/.config/opencode/opencode.json`**:
+  `curl/wget/docker/kill *: deny` — verified to hold under hmz's exact
+  spawn shape (`opencode run --auto`), including a `webfetch: deny` rule.
+  Remaining gap by design: python-urllib heredocs can't be pattern-denied
+  without killing legitimate `python3` math use; the root-cause fix is the
+  upstream `header_imports` repair (above). Earlier incident history
+  (Putnam 2023 B6 solution-PDF download, prompt-level rules) unchanged.
 - Docker Desktop does not start from `cmd /c start`; it does from PowerShell
   `Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'`
   (`.m0/wait_docker.sh` polls until the WSL integration is up).
 - hmz spawns agent CLIs by bare name: a non-interactive WSL shell resolves
   `kimi` to the Windows-side shim `/mnt/c/Users/winst/.kimi-code/bin/kimi`
-  (EACCES) unless `~/.kimi-code/bin` is prepended to PATH first
-  (`.bashrc` does it, but non-interactive shells don't read it).
+  (EACCES) unless `~/.kimi-code/bin` is prepended to PATH first, and
+  `opencode` is not found at all (`FileNotFoundError` at the first builder
+  turn, 2026-09-10) unless `~/.opencode/bin` is on PATH. `.bashrc` exports
+  both (kimi line ~120, opencode appended 2026-09-10), but only INTERACTIVE
+  shells read it — non-interactive launches need the exports inline.
 - Live-status helpers: `.m0/ablation_status.sh` (per-arm journal snapshot;
   `watch -n 20 -t` it), `.m0/conformance_all.sh`, `.m0/inspect_run*.sh`.
+- **Memory resize 2026-09-10 (IMO q1 run blocked on 503s):** the RC0
+  container's 14g cap was unreachable anyway — WSL itself was capped at the
+  default ~50% of host RAM (~15 GiB), and two RC0 Isabelle sessions
+  (~6.5 GB each) + JVM filled it, so the 80% memory-admission gate 503'd
+  every further acquire (the builder burned 31 steps diagnosing it; zero
+  file edits). Fix: `C:\Users\winst\.wslconfig` now sets `memory=24GB`
+  (host 32 GB), WSL + Docker Desktop restarted, and `isabelle-gym-rc0`
+  recreated manually (no compose service for RC0) with `--memory 20g`,
+  same image/env/volume/port (`isabelle_rc0_user_data`,
+  8001→8000, env snapshot in `~/rc0.env.backup`). Gotcha: a *recreated*
+  container has no `/app/logs` — `mkdir -p /app/logs` before the detached
+  `server.app.main` start or the redirect kills it silently. Verified:
+  heaps intact (HOL … HOL-Computational_Algebra, HOL-Library),
+  acquire/release OK at 2.4/20 GiB, arbiter smoke green.
 
 ## Known gaps / next actions
 
-- **`DEEPSEEK_API_KEY` not set anywhere** — needed for the DeepSeek runs
-  (owner's). Once set: live-confirm hmz accepts
-  `opencode/deepseek/deepseek-v4-flash:<effort>`, then one rlcr validation
-  run with both roles opencode/deepseek (the IMO/Putnam configuration) and
-  one with builder kimi + reviewer opencode/deepseek (the
-  family-diverse configuration). The dsh fallback
-  (`reviewer_mcp: false`) is implemented but likely unnecessary now.
+- **LSP MCP cannot load non-Main imports — RESOLVED (upstream).**
+  Fixed 2026-09-04 (theories-at-acquire). **Follow-up header-imports regex
+  bug — RESOLVED 2026-09-09 (Plan B landed):** one canonical parser
+  (`server/app/services/theory_parsing.py`, nested-comment stripping +
+  header anchoring) now backs `header_imports` and
+  `build_verify.extract_imports`, plus the structural endpoint
+  `POST /api/v1/parse_theory_header` → `{theory_name, imports,
+  suggested_field}` (+ `async_client` wrapper). Verified on the real
+  `~/putnam-runs/q4/problem.thy`: `isabelle_open` + diagnostics succeed, zero
+  comment pollution. Side note (pre-existing, not the parser): bigstep's
+  single-parent build can't span two session families in one build.
+- **Lease-leak handoff — RESOLVED 2026-09-09:** public listing no longer
+  carries `lease_id`; full listing gated behind
+  `GET /api/v1/admin/sessions` (`X-Admin-Token` vs `ISABELLE_ADMIN_TOKEN` in
+  the gym `.env`); DELETEs are audit-logged + counted
+  (`isabellegym_sessions_force_closed_total`); `isabelle_close(destroy=)` +
+  `ISABELLE_MCP_LSP_CLOSE_DESTROYS` gives the sanctioned teardown.
+  `tests/test_lease_security.py` covers it; live acceptance green on :8001.
+- **Run-readiness (2026-09-09): the flow targets RC0 on :8001.**
+  `RLCRConfig.gym_url` default flipped to `http://localhost:8001`; all
+  `.mcp.json` copies (user-level `~/.kimi-code/mcp.json`, template, `.m0`)
+  point at :8001. Fixes above are live AND baked into the refreshed image
+  `isabellegym-isabelle-gym:2026rc0`. Heaps: HOL + HOL-Analysis present;
+  HOL-Number_Theory and HOL-Combinatorics building in the idle build
+  container (q4's cross-session imports already resolve on demand).
+- **Third handoff (2026-09-09): `isabellegym-lease-leak-issue.md`.**
+  `GET /api/v1/sessions` returns every session's `lease_id` without a
+  lease, so the lease check on `DELETE /sessions/{id}` is bypassable by any
+  client (enumerate → steal → destroy), with no task_group scoping.
+  Observed in the wild: our agents did exactly this (their own sessions)
+  during the Putnam runs. Includes a feature ask: a sanctioned destroy path
+  in the LSP MCP (`isabelle_close(destroy=true)` or
+  `ISABELLE_MCP_LSP_CLOSE_DESTROYS`) so agents stop hand-rolling curl
+  DELETEs; scratch pool's `drop_scratch` is the precedent.
+- **RC0 migration landed (2026-09, IsabelleGym side).** Commits `a9e1683`
+  (REPL Scala backend RC0-compatible), `d865f31` (JVM aliveness recovery via
+  RC0's Event_Timer probe — the Bug-9 hardening: schedule a no-op on the
+  JVM-global timer to detect its cancellation), `af14618` (RC0 Dockerfile).
+  RC0 server runs on **:8001** (2025-2 remains on :8000); agent MCP configs
+  flipped to :8001 at cutover (2026-09-09) and `RLCRConfig.gym_url` defaults
+  to it. Note: Event_Timer is *not* in RC0's NEWS; the Bug-9 fix is the
+  detection/probe approach plus the upstream `88acf2619921` task-hardening
+  (both validated: 12/12 stress rounds on RC0).
+- **`DEEPSEEK_API_KEY` is set** (in `~/.bashrc` and opencode's own
+  `~/.local/share/opencode/auth.json`, mode 600 — hmz-hush-proof). The
+  opencode/deepseek route is validated end-to-end (rlcr run, conformance
+  7/7). **Key rotation must update both stores:** opencode prefers the
+  `auth.json` credential over the env var — the 2026-09-10 q1 attempt kept
+  using the stale Sep-4 key until `auth.json` was re-synced to the bashrc
+  key. Optional follow-ups: qwen 401 re-auth (third family), dsh fallback
+  (`reviewer_mcp: false`) implemented but likely unnecessary.
 - qwen re-auth (401) — owner's credentials (optional third family).
 - `workspaces/template/.mcp.json` carries WSL-machine paths (documented as
   placeholders in its README).

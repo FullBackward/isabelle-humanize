@@ -77,6 +77,35 @@ def test_parse_spec_missing_theory_line_raises() -> None:
         arbiter.parse_spec("lemma smoke: \"True\" by simp\n", fallback_field="HOL")
 
 
+def test_parse_spec_fallback_one_line_header() -> None:
+    """`theory X imports A B` on one line (the PutnamBench layout): the
+    imports must still be found (was the putnam_2023_a1 empty-imports bug)."""
+    text = (
+        'theory Problem imports Complex_Main\n"HOL-Analysis.Derivative"\nbegin\n\n'
+        'lemma target: "True" by simp\n\nend\n'
+    )
+    spec = arbiter.parse_spec(text, fallback_field="HOL")
+    assert spec.imports == ["Complex_Main", "HOL-Analysis.Derivative"]
+
+
+def test_parse_spec_fallback_multiline_imports() -> None:
+    text = (
+        "theory Problem\n"
+        "  imports Complex_Main\n"
+        '    "HOL-Analysis.Derivative"\n'
+        "    Main\n"
+        "begin\n\nlemma target: \"True\" by simp\n\nend\n"
+    )
+    spec = arbiter.parse_spec(text, fallback_field="HOL")
+    assert spec.imports == ["Complex_Main", "HOL-Analysis.Derivative", "Main"]
+
+
+def test_parse_spec_fallback_no_imports() -> None:
+    text = "theory Bare\nbegin\n\nlemma target: \"True\" by simp\n\nend\n"
+    spec = arbiter.parse_spec(text, fallback_field="HOL")
+    assert spec.imports == []
+
+
 def test_parse_spec_no_task_comment_and_no_lemma_raises() -> None:
     with pytest.raises(arbiter.ArbiterError):
         arbiter.parse_spec("theory Smoke\nimports Main\nbegin\nend\n", "HOL")
@@ -253,7 +282,13 @@ def test_readiness_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert subgoals["method"] == "GET"
     assert subgoals["lease_id"] == "l1"
     assert acquire["method"] == "POST"
-    assert acquire["payload"] == {"reuse_dirty": True, "field": "HOL"}
+    # Theories are passed at acquire: this gym's REPL sessions cannot load
+    # parents beyond their heap-ancestor chain without them.
+    assert acquire["payload"] == {
+        "reuse_dirty": True,
+        "field": "HOL",
+        "theories": ["Main"],
+    }
 
     assert document["method"] == "PUT"
     assert document["payload"]["text"] == TASK_FILE  # full source, header included
@@ -294,3 +329,67 @@ def test_readiness_subgoals_failure_is_not_fatal(
     ready = arbiter.readiness(workspace, RLCRConfig(), _spec())
     assert ready.success is True
     assert ready.goals == []
+
+
+def test_parent_session_derivation() -> None:
+    """Dotted imports drive the build's parent session (HOL-Analysis.X ->
+    HOL-Analysis); plain imports keep the spec field."""
+    dotted = TaskSpec(
+        theory_name="P", target_theorem="t",
+        imports=["Complex_Main", "HOL-Analysis.Derivative"], field="HOL",
+    )
+    assert arbiter.parent_session(dotted) == "HOL-Analysis"
+    plain = TaskSpec(
+        theory_name="P", target_theorem="t", imports=["Main"], field="HOL",
+    )
+    assert arbiter.parent_session(plain) == "HOL"
+    none = TaskSpec(
+        theory_name="P", target_theorem="t", imports=[], field="HOL-Library",
+    )
+    assert arbiter.parent_session(none) == "HOL-Library"
+
+
+def test_check_removed_original_import_rejected_no_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A theory that dropped one of its original imports is rejected at the
+    'imports' stage without any build call (the putnam_2023_a1 shortcut:
+    shedding HOL-Analysis.Derivative and re-implementing deriv locally)."""
+    monkeypatch.setattr(arbiter, "_request", _fail_if_http)
+    text = (
+        "theory Problem imports Complex_Main\nbegin\n\n"
+        'lemma putnam_2023_a1: "True" by simp\n\nend\n'
+    )
+    workspace = _workspace(tmp_path, text)
+    spec = TaskSpec(
+        theory_name="Problem",
+        target_theorem="putnam_2023_a1",
+        imports=["Complex_Main", "HOL-Analysis.Derivative"],
+        field="HOL",
+    )
+    verdict = arbiter.check(workspace, RLCRConfig(), spec)
+    assert verdict["solved"] is False
+    assert verdict["stage"] == "imports"
+    assert "HOL-Analysis.Derivative" in verdict["reason"]
+
+
+def test_check_added_import_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adding a library is fine: a superset of the original imports passes
+    the subset gate and reaches the build stage."""
+    calls = _capture_request(monkeypatch, _fixture("response_good.json"))
+    text = (
+        'theory ArbiterSmoke\nimports Main "HOL-Library.Multiset"\nbegin\n\n'
+        'lemma arbiter_smoke: "True" by simp\n\nend\n'
+    )
+    workspace = _workspace(tmp_path, text)
+    spec = TaskSpec(
+        theory_name="ArbiterSmoke",
+        target_theorem="arbiter_smoke",
+        imports=["Main"],
+        field="HOL",
+    )
+    verdict = arbiter.check(workspace, RLCRConfig(), spec)
+    assert verdict["stage"] == "build"  # not stopped at 'imports'
+    assert len(calls) == 1

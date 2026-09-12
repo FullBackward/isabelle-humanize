@@ -30,7 +30,7 @@ import memory
 import progress
 from hmz.flows import Agent, Person, flow
 from hmz.flows import Question as Asking
-from schemas import LessonSelection, RLCRConfig, Verdict
+from schemas import LessonSelection, RLCRConfig, TaskSpec, Verdict
 
 #: The loop's own directory inside the workspace (untracked, git-clean-except).
 LOOP_DIR = ".rlcr"
@@ -177,7 +177,11 @@ def _review(
             "   re-sync from disk; you cannot modify anything through them):\n"
             "   - `mcp__isabellegym__isabelle_diagnostic_messages` on the problem file\n"
             "   - `mcp__isabellegym__isabelle_proof_state`\n"
-            "   - `mcp__isabellegym__isabelle_goal` at lines that changed"
+            "   - `mcp__isabellegym__isabelle_goal` at lines that changed\n"
+            "   - `mcp__isabellegym__isabelle_query` for read-only library lookups\n"
+            "     (find_theorems, thm, print_*) -- never the internet\n"
+            "   - `mcp__isabellegym__isabelle_sledgehammer` at a stuck line, to see\n"
+            "     what automation the builder could have used"
             if cfg.reviewer_mcp
             else
             "2. You have NO prover tools in this run (no MCP attached). Review from\n"
@@ -431,6 +435,8 @@ def run(
         )
         held = gates.immutable_section(tracker.read_text(encoding="utf-8"))
         kept["immutable_sha"] = hashlib.sha256(held.encode()).hexdigest()
+        kept["spec"] = spec.model_dump()  # setup-time spec: resume re-reads
+        # THIS, never a builder-edited TASK comment
         _, kept["start_branch"] = gates.git("rev-parse", "--abbrev-ref", "HEAD", at=root)
         kept["start_branch"] = kept["start_branch"].strip()
         kept["current_round"] = 0
@@ -452,6 +458,10 @@ def run(
     kept.setdefault("last_verdict", "")
     kept.setdefault("verdicts_history", [])
     kept.setdefault("last_goals", [])
+    if isinstance(kept.get("spec"), dict):
+        # The setup-time spec wins over whatever the TASK comment says now:
+        # the comment is agent-editable, the snapshot is not.
+        spec = TaskSpec(**kept["spec"])
 
     building = agents.builder.new()
     prompt = _render(
@@ -543,6 +553,8 @@ def run(
         #    One backoff retry before burning a builder round on it: a full
         #    session pool recovers on its own (leases are reaped), tokens do not.
         ready = None
+        readiness_error = ""  # the except's `as` name is deleted with its
+        # block (PEP 3110) -- capture the text, not the exception
         for attempt, wait in ((1, 0), (2, 30)):
             if wait:
                 time.sleep(wait)
@@ -554,9 +566,10 @@ def run(
                 )
                 break
             except arbiter.ArbiterError as failed:
+                readiness_error = str(failed)
                 _journal(
                     loop_dir, "readiness_error", round=round_no, attempt=attempt,
-                    error=str(failed),
+                    error=readiness_error,
                 )
         if ready is None:
             prompt = _render(
@@ -569,7 +582,7 @@ def run(
                 LESSON_NOTE="",
                 REASON=(
                     "The mechanical readiness check could not run "
-                    f"({failed}). Keep editing and checking with the MCP tools."
+                    f"({readiness_error}). Keep editing and checking with the MCP tools."
                 ),
             )
             kept["current_round"] = round_no + 1

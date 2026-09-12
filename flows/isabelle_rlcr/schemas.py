@@ -74,7 +74,9 @@ class RLCRConfig(BaseModel):
         "instructions and the flow supplies prover state over REST",
     )
     gym_url: str = Field(
-        default="http://localhost:8000", description="IsabelleGym server base URL"
+        default="http://localhost:8001",
+        description="IsabelleGym server base URL (8001 = the Isabelle2026-RC0 "
+        "track; 8000 is the 2025-2 track)",
     )
     field: str = Field(default="HOL", description="default Isabelle session field")
     problem_file: str = Field(
