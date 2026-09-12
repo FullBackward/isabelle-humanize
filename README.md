@@ -11,6 +11,8 @@ The repo ships one [humanize2](https://github.com/humanfia/humanize2) (`hmz`)
 flow, **`isabelle_rlcr`** (`flows/isabelle_rlcr/`), plus workspace templates,
 tooling, tests, and an archive of finished runs (`runs/`).
 
+**Note: humanize2 does not support Windows machines, if you are trying to use a Windows machine, better setup everything from WSL.**
+
 How a run works, in one line: **hmz drives builder/reviewer CLI agents; each
 agent talks to the prover through the IsabelleGym LSP MCP; the flow itself
 talks to the gym only over REST for the mechanical readiness gate and the
@@ -23,48 +25,51 @@ present).** Agents act, the flow judges; only the arbiter can declare
 ## Reproducing the run environment (fresh machine)
 
 Everything below §1–§6 documents the reference machine; for a fresh machine,
-use the automated setup instead:
+use the automated setup instead.
 
-**You need:** WSL2 (Ubuntu) + Docker Desktop; the exported RC0 image tarball
-(`docker save isabellegym-isabelle-gym:2026rc0`); the heap volume tarball
-(recommended — see below); an IsabelleGym checkout (the MCP server code runs
-host-side from it, and its `.env` configures the container); a humanize2
+**You need:** WSL2 (Ubuntu) + Docker Desktop; **a running IsabelleGym server**
+— set that up first, from the IsabelleGym repo: `./setup.sh` (see its `README.md`); an IsabelleGym
+checkout regardless (the MCP server code runs host-side from it); a humanize2
 checkout; this repo; a DeepSeek API key.
 
 ```sh
 bash tools/setup_repro.sh \
-    --image-tar  isabellegym-rc0.tar.gz \
-    --volume-tar isabelle_rc0_user_data.tar.gz \
     --gym-src    ~/IsabelleGym \
     --hmz-src    /path/to/humanize2
 ```
 
-The script is idempotent and does ten things: prerequisite checks; WSL memory
-(`.wslconfig` 24 GB — needs one `wsl --shutdown`); container create
-(`isabelle-gym-rc0`, `--memory 20g`, port `8001→8000`, heap volume
-`isabelle_rc0_user_data`); gym server start; the `lsp-mcp` venv (`mcp<2` +
+The script is idempotent and covers the **shared, humanize-side wiring** (it
+assumes the IsabelleGym server is already up per the IsabelleGym repo):
+prerequisite checks; WSL memory (`.wslconfig` 24 GB — needs one `wsl
+--shutdown`); gym healthz + heap verification; the `lsp-mcp` venv (`mcp<2` +
 httpx); the **persistent streamable-http MCP service** on `127.0.0.1:8849`
 (the fix for opencode's stdio MCP drops — do not go back to stdio for
-opencode); opencode config; the hmz venv; `.bashrc` PATH exports; and smoke
-checks (healthz + arbiter good/sorry probe). `bash tools/setup_repro.sh
---check` verifies prerequisites only.
+opencode); **harness availability checks**; the hmz venv; and smoke checks
+(healthz + arbiter good/sorry probe). `bash tools/setup_repro.sh --check`
+verifies prerequisites only.
 
-**Export the heap volume on the source machine** (heaps are NOT in the image —
-without this, first runs rebuild them, tens of minutes each):
+**The agent harnesses are set up by you, not the script** — install clients such as: Kimi code, Clause Code, Opencode and etc, log in, configure providers and API keys (see §2). The script
+only reports what it finds.
+
+**The run constraints are applied per harness by a second script** — pick
+which harness(es) to isolate:
 
 ```sh
-docker run --rm -v isabelle_rc0_user_data:/data -v "$PWD":/backup alpine \
-  sh -c "cd /data && tar czf /backup/isabelle_rc0_user_data.tar.gz ."
+bash tools/setup_isolation.sh opencode        # permission block in opencode.json
+bash tools/setup_isolation.sh kimi            # [[permission.rules]] denies in config.toml
+bash tools/setup_isolation.sh opencode kimi   # both seats
+bash tools/setup_isolation.sh --dry-run kimi  # preview without writing
 ```
 
-**The run constraints are reproduced by the script, not by prose.** The
-generated `~/.config/opencode/opencode.json` carries the exact permission
-block the runs used — `webfetch: deny` and bash denies for
-`curl/wget/docker/kill` and any local `isabelle build` (order matters:
-catch-all `"*"` first, denies last — opencode's last-matching-rule-wins). Do
+Both write the same constraint set the runs used: no internet
+(`webfetch`/`FetchURL`/`WebSearch` deny), no `curl`/`wget`/`docker`/`kill`,
+no local `isabelle build` (opencode: catch-all first, denies last —
+last-matching-rule-wins; kimi: `[[permission.rules]]` denies — first match
+wins, so review ordering if your config already has broad allow rules). Do
 not weaken these; they are what "no internet, no side-channel builds" means
-structurally. Remaining constraint by design: python one-liners can't be
-pattern-denied — that's prompt-level (see `flows/isabelle_rlcr/prompts/round0.md`).
+structurally. `dsh` has no config-level isolation — it is prompt-level only.
+Remaining gap by design: python one-liners can't be pattern-denied — that's
+prompt-level (see `flows/isabelle_rlcr/prompts/round0.md`).
 
 After setup, one problem runs as (also printed by the script):
 
@@ -100,34 +105,30 @@ Flash price) — later reproductions should switch the `-a` specs accordingly.
     `reviewer_mcp: false`
 - a venv for the MCP server: `~/.venvs/lsp-mcp` with `mcp<2` + `httpx`
 
-## 1. Bring up IsabelleGym
+## 1. IsabelleGym server (assumed running)
+
+The runs expect an IsabelleGym server at `http://localhost:8001` (the
+`gym_url` default in `flows/isabelle_rlcr/schemas.py`). **Set it up from the
+IsabelleGym repo** — turnkey image per its `EXPORT.md`, or `./setup.sh` from a
+checkout per its `README.md` — then verify:
 
 ```sh
-cd ~/IsabelleGym
-docker compose up -d isabelle-gym
-
-# the API server does NOT auto-start with the container:
-docker compose exec -d isabelle-gym bash -c \
-  "python -m server.app.main > /app/logs/m0-server.out 2>&1"
-
-curl http://localhost:8001/healthz   # expect OK
+curl http://localhost:8001/healthz   # {"status":"alive"}
 ```
 
-Required container config (already in the IsabelleGym `.env` on the reference
-machine):
+What the runs assume of that server (all satisfied by the turnkey image and
+by the repo's default `.env.example` + entrypoint):
 
-- `ML_SYSTEM_64=true` — the default 32-bit PolyML gets SIGKILLed building
-  HOL-Analysis under the container memory cap
-- `ISABELLE_POOL_SIZE=6`, `ISABELLE_MAX_LEASE_AGE=600`,
-  `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE=1` — pool tuning against zombie leases
-
-**First HOL-Analysis run stalls for tens of minutes** while the session image
-builds. Pre-build it once (`/root/.isabelle` is a persistent named volume):
-
-```sh
-docker compose exec -d isabelle-gym bash -c \
-  "isabelle build -b HOL-Analysis > /app/logs/heap-HOL-Analysis.log 2>&1"
-```
+- Isabelle **2026-RC0** with session heaps pre-built (HOL, HOL-Library,
+  HOL-Computational_Algebra, HOL-Analysis, HOL-Number_Theory,
+  HOL-Combinatorics — `curl localhost:8001/api/v1/heaps/available`).
+- **ML heap cap** (Poly/ML `--maxheap`, default 9 GB) so one pathological
+  theory fails its build cleanly instead of OOM-killing the container —
+  written into the Isabelle user settings by the gym's container entrypoint.
+  (Note: we run **32-bit** `x86_64_32-linux` PolyML with the cap; an earlier
+  revision of this README recommended `ML_SYSTEM_64=true` — superseded.)
+- Pool tuning against zombie leases: `ISABELLE_POOL_SIZE=3`,
+  `ISABELLE_MAX_LEASE_AGE=600`, `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE=1`.
 
 ## 2. Wire up the agents' MCP
 
@@ -393,7 +394,9 @@ curl http://localhost:8001/healthz
 docker stats isabelle-gym-rc0 --no-stream     # RC0 track container (post-cutover;
                                               # `isabelle-gym` was the retired :8000 one)
 curl -s http://localhost:8001/api/v1/sessions  # session pool / leases
-tail -30 ~/IsabelleGym/logs/server.log         # gym server log
+tail -30 ~/IsabelleGym/logs/server.log         # gym file log (compose setup: repo is
+                                               # mounted at /app). Otherwise:
+                                               # docker logs --tail 30 isabelle-gym-rc0
 ls ~/.humanize/cycles/                         # hmz's own cycle journals
 ```
 
