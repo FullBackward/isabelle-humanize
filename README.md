@@ -92,7 +92,7 @@ Flash price) — later reproductions should switch the `-a` specs accordingly.
 - **WSL 2** (the whole setup runs WSL-native; this repo is read through
   `/mnt/c/...` but workspaces and IsabelleGym live in the WSL filesystem)
 - **Docker Desktop** with WSL integration
-- **[IsabelleGym](https://github.com/Berkeley-Isabelle/IsabelleGym)** v3.0,
+- **[IsabelleGym](https://github.com/FullBackward/IsabelleGym)** v3.0,
   cloned WSL-native at `~/IsabelleGym` — consumed **unmodified**
 - **humanize2 (`hmz`)** in a venv, e.g. `~/.venvs/hmz` (provides `hmz.flows`
   and pydantic to flows)
@@ -109,8 +109,9 @@ Flash price) — later reproductions should switch the `-a` specs accordingly.
 
 The runs expect an IsabelleGym server at `http://localhost:8001` (the
 `gym_url` default in `flows/isabelle_rlcr/schemas.py`). **Set it up from the
-IsabelleGym repo** — turnkey image per its `EXPORT.md`, or `./setup.sh` from a
-checkout per its `README.md` — then verify:
+IsabelleGym repo** — turnkey image per its
+`Isabelle2026-RC0_version_docker_image_instruction.md` (2026-RC0 branch), or
+`./setup.sh` from a checkout per its `README.md` — then verify:
 
 ```sh
 curl http://localhost:8001/healthz   # {"status":"alive"}

@@ -116,6 +116,20 @@ value via `-c` on heavy problems, and note the loop's readiness gate can
 starve behind agent-held pool slots (28 readiness errors this run) while
 the arbiter itself needs no session.
 
+IMO q1 successful-run post-mortem (2026-09-10, `runs/imo2026_p1-rlcr-deepseek/ANALYSIS.md`):
+24% of the run lost to 12×300 s MCP timeouts after a gateway JVM death
+(handoff `isabellegym-jvm-restart-and-reload-cost-issue(temp).md`, also
+covering the 36% full-reload-per-edit cost and the LOAD_TIMEOUT mismatch);
+prompt compliance clean (0 metis/smt, scratch discipline held). Owner steer
+from the same analysis: the builder UNDER-used sledgehammer (2 calls in 4 h
+— the ATP bans overshot into abstinence). Rule 6 is now tiered:
+**sledgehammer early and often** — routine finishing goals may go straight
+to `simp`/`auto`/`blast`, but anything those don't close quickly gets an
+immediate sledgehammer call ("two edits on the same subgoal without closing
+it means sledgehammer NOW"), `metis`/`smt` still verbatim-suggestion-only
+(rule 7 unchanged); the reviewer's ATP audit now also flags
+under-automation (manual grind where one sledgehammer call would do).
+
 Attempt 2 (2026-09-10, aborted after ~15 min): the builder's FIRST MCP call
 returned "Not connected" — a transient startup race (opencode 1.18.27 tears
 down and re-establishes idle MCP connections; the call landed in a reconnect

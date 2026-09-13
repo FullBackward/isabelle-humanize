@@ -10,11 +10,12 @@ The mechanical check of your last round said:
 Continue from the file as it stands. Work in small steps, check every step
 with `mcp__isabellegym__isabelle_diagnostic_messages`, and follow the
 escalation ladder (goal inspection -> sledgehammer -> multi_attempt ->
-decompose into helper lemmas). The sledgehammer-first rule applies: no
-automated method -- ATP calls or `simp`/`blast`/`auto`/`presburger` --
-without an `mcp__isabellegym__isabelle_sledgehammer` call on that goal
-first, and library lookups go through `mcp__isabellegym__isabelle_query`,
-never the internet. Update the MUTABLE section of
+decompose into helper lemmas). Use sledgehammer early and often: routine
+finishing goals may go straight to `simp`/`auto`/`blast`, but anything
+they don't close quickly gets an `mcp__isabellegym__isabelle_sledgehammer`
+call immediately -- never a third manual edit on the same subgoal.
+`metis`/`smt` only as verbatim sledgehammer suggestions, and library
+lookups go through `mcp__isabellegym__isabelle_query`, never the internet. Update the MUTABLE section of
 `{{GOAL_TRACKER_FILE}}` with where the proof stands and what you try next.
 
 {{LESSON_NOTE}}

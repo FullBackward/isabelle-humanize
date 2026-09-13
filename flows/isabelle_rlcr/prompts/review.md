@@ -27,7 +27,12 @@ OOM-killed. If you spot a massive amount of such calls, REJECT the round:
 judge it REGRESSED regardless of what diagnostics or the mechanical
 readiness say, put the offending lines at the top of issues, and require
 the builder to replace them with structured Isar or fresh verbatim
-sledgehammer suggestions.
+sledgehammer suggestions. The symmetric failure mode is UNDER-automation:
+a round that grinds through many manual decompose-edit-check cycles on
+goals one sledgehammer call would have discharged. That is not a REGRESSED
+verdict on its own, but list it as an issue and direct the builder to
+sledgehammer such goals immediately -- sledgehammer use is expected to be
+frequent on hard goals, not a last resort.
 
 Judge ONLY the mainline question: did this round move the proof toward a
 complete, arbiter-acceptable state? Do not write proof text, do not attempt

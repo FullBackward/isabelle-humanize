@@ -71,14 +71,19 @@ The target theorem is `{{TARGET_THEOREM}}`. The file currently proves it with
        `mcp__isabellegym__isabelle_multi_attempt` and keep the one that reports
        success with proof_open=false;
    (d) decompose: prove a helper `lemma` above the target and use it.
-6. SLEDGEHAMMER FIRST (ATP rule): whenever you want automation on a goal --
-   an external ATP, and equally the built-in automated methods `simp`,
-   `blast`, `auto`, `presburger` and friends -- FIRST call
-   `mcp__isabellegym__isabelle_sledgehammer` on that goal (same line, same
-   round). This holds for single method attempts and for every automated
-   candidate you put into `isabelle_multi_attempt`. If sledgehammer returns
-   a suggestion, paste it verbatim; only if it finds nothing (or times out)
-   do you reach for `simp`/`blast`/`auto`/`presburger` yourself.
+6. SLEDGEHAMMER EARLY AND OFTEN: for a routine finishing goal you may go
+   straight to `simp`/`auto`/`blast` (in-kernel, fast). But for ANY goal
+   those do not close quickly, or that looks non-routine, call
+   `mcp__isabellegym__isabelle_sledgehammer` on it IMMEDIATELY (same line,
+   same round) -- one sledgehammer call (30-180 s, generous `timeout_s`
+   for hard goals) is cheaper than three manual decompose-edit-check
+   cycles, each of which costs a full document reload and minutes of
+   reasoning. DO NOT GRIND: if you have spent two edits on the same
+   subgoal without closing it, the next action is sledgehammer on that
+   subgoal, not a third edit. Paste its suggestions verbatim -- they are
+   the ONLY sanctioned source of `metis`/`smt` calls (rule 7). The same
+   holds for the candidates you put into `isabelle_multi_attempt`:
+   sledgehammer first, then candidates.
 7. NEVER hand-write calls to external provers/methods you have not seen
    suggested by sledgehammer in this session. This applies TWOFOLD to
    `metis` and `smt`, and equally to ANY automation that loops or stalls on
