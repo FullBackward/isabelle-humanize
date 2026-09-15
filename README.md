@@ -395,11 +395,67 @@ curl http://localhost:8001/healthz
 docker stats isabelle-gym-rc0 --no-stream     # RC0 track container (post-cutover;
                                               # `isabelle-gym` was the retired :8000 one)
 curl -s http://localhost:8001/api/v1/sessions  # session pool / leases
-tail -30 ~/IsabelleGym/logs/server.log         # gym file log (compose setup: repo is
-                                               # mounted at /app). Otherwise:
-                                               # docker logs --tail 30 isabelle-gym-rc0
+docker logs -f isabelle-gym-rc0                # gym server log (containerised gym:
+                                               # the entrypoint logs to stdout)
+tail -30 ~/IsabelleGym/logs/server.log         # compose-style setup only (repo at /app)
 ls ~/.humanize/cycles/                         # hmz's own cycle journals
 ```
+
+### Inspecting the agent itself (opencode)
+
+The journal tells you what the *loop* did; opencode's own store tells you
+what the *agent* is doing right now (tool calls, reasoning, MCP errors):
+
+```sh
+# opencode's runtime log (MCP connect/close events, permission decisions):
+tail -f ~/.local/share/opencode/log/opencode.log
+
+# the session database (SQLite, read-only): latest session's recent activity
+python3 - <<'EOF'
+import sqlite3, json, datetime
+db = sqlite3.connect('file:/home/winst/.local/share/opencode/opencode.db?mode=ro', uri=True)
+scols = [r[1] for r in db.execute('PRAGMA table_info(session)')]
+sid = dict(zip(scols, list(db.execute(
+    'SELECT * FROM session ORDER BY time_created DESC LIMIT 1'))[0]))['id']
+print('session:', sid)
+for ts, data in db.execute(
+        'SELECT time_created, data FROM part WHERE session_id=? ORDER BY rowid DESC LIMIT 15',
+        (sid,)):
+    pass
+rows = list(db.execute(
+    'SELECT time_created, data FROM part WHERE session_id=? ORDER BY rowid DESC LIMIT 15',
+    (sid,)))
+for ts, data in reversed(rows):
+    try:
+        j = json.loads(data); t = j.get('type')
+        when = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%H:%M:%S')
+        if t == 'tool':
+            st = j.get('state', {})
+            print(f'{when} TOOL {j.get("tool")} [{st.get("status")}]',
+                  json.dumps(st.get('input', {}))[:120])
+        elif t == 'reasoning':
+            txt = (j.get('text') or '').strip()
+            if txt: print(f'{when} THINK:', txt[:150].replace(chr(10), ' '))
+        elif t == 'text':
+            txt = (j.get('text') or '').strip()
+            if txt: print(f'{when} SAY:', txt[:120].replace(chr(10), ' '))
+    except Exception:
+        pass
+EOF
+```
+
+Notes on using it:
+
+- The `session` table carries per-session `cost`, `tokens_input/output/
+  reasoning/cache_read/cache_write`, `time_created`, `directory` — the raw
+  material `tools/agent_time.py` aggregates (cost, agent-active minutes).
+- The `part` table is the event stream: `step-start`/`step-finish` (LLM
+  turns), `reasoning` (thinking traces), `tool` (with `state.status` and
+  `state.input`/`output` — MCP errors like `Not connected` show up here
+  first), `text` (what the agent says).
+- Filter `session` by `directory` + `time_created` window to isolate one
+  run; each builder/reviewer turn is its own session row.
+- Always open it read-only (`?mode=ro` as above) while a run is live.
 
 If `hmz exec` disappears from `ps` without a `"terminal"` record in the
 journal, the run died (WSL crash, OOM, SIGTERM) — re-run the same command in
